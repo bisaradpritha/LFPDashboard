@@ -1,5 +1,7 @@
 # LFP Dashboard
 
+![LFP Dashboard](logo.png)
+
 An interactive MATLAB app for exploring and comparing pallidal local field potential (LFP) recordings from Medtronic Percept™ (BrainSense™) DBS devices. It loads the JSON session files exported from the clinician programmer and brings the recording modalities together in one window: Timeline, Events, Survey (frequency and time domain), and Streaming. You can then compare any two or more sessions to see how neural activity changes with therapy.
 
 The whole app is a single file, `LFPDashboard.m`, and uses **base MATLAB only**. No Signal Processing or Statistics toolbox is required: filtering, Hilbert transform, Welch PSD, spectrograms, percentiles, FOOOF-style fitting, IRASA and every statistical test are implemented in the file.
