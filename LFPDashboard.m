@@ -18,6 +18,8 @@ function LFPDashboard()
 %   Timeline   Chronic BrainSense Timeline (LFPTrendLogs) per hemisphere with
 %              24-h moving median, epochs (one per file) and event markers;
 %              stimulation amplitude panel underneath (x-axes linked);
+%              manual events (add by dialog or by clicking the plot; edit,
+%              delete, import/export CSV);
 %              24-h profile in 10-min bins (all data / by score group / by epoch).
 %   Timeline   3-D surfaces (date x hour of day x artifact-cleaned power) per
 %   3D         session and hemisphere, side by side, stacked or one surface.
@@ -82,6 +84,8 @@ S.infoFile   = [];
 S.ovRows     = [];
 S.t3Link     = [];
 S.stLast     = [];       % last analysed streaming recording (for segment metrics)
+S.lastDir    = pwd;      % where the next file/folder dialog opens
+S.manEv      = struct('dt', {}, 'name', {}, 'note', {});   % manual Timeline events (UTC)
 S.statsTable = table();
 S.statsText  = {};
 
@@ -104,8 +108,15 @@ lg  = uigridlayout(pnl, [12 2]);
 lg.RowHeight   = {30, 30, 24, '1x', 170, 22, 22, 22, 22, 24, 22, 30};
 lg.ColumnWidth = {125, '1x'};
 
-btnLoad = uibutton(lg, 'Text', 'Load JSON files...', 'ButtonPushedFcn', @(~,~) onLoad());
-place(btnLoad, 1, [1 2]);
+gLoad = uigridlayout(lg, [1 2]);
+gLoad.Padding = [0 0 0 0]; gLoad.ColumnSpacing = 6;
+place(gLoad, 1, [1 2]);
+uibutton(gLoad, 'Text', 'Add files...', ...
+    'Tooltip', 'Pick JSON files from any folder; repeat to add files from other folders', ...
+    'ButtonPushedFcn', @(~,~) onLoad());
+uibutton(gLoad, 'Text', 'Add folder...', ...
+    'Tooltip', 'Load every JSON file in a folder and all of its subfolders', ...
+    'ButtonPushedFcn', @(~,~) onLoadFolder());
 btnClear = uibutton(lg, 'Text', 'Clear all', 'ButtonPushedFcn', @(~,~) onClear());
 place(btnClear, 2, [1 2]);
 gSel = uigridlayout(lg, [1 3]);
@@ -191,20 +202,37 @@ taOv = uitextarea(g0b, 'Editable', 'off', 'FontName', 'Courier New', 'FontSize',
 
 % ---------------- Timeline tab
 g1 = uigridlayout(tabTL, [4 1]);
-g1.RowHeight = {30, '1.3x', 105, '1x'};
-c1 = uigridlayout(g1, [1 6]);
+g1.RowHeight = {62, '1.3x', 105, '1x'};
+c1 = uigridlayout(g1, [2 6]);
 c1.Padding = [0 0 0 0];
-c1.ColumnWidth = {110, 110, 100, 160, '1x', 90};
-chkEvents = uicheckbox(c1, 'Text', 'Show events', 'Value', true, ...
+c1.ColumnWidth = {125, 110, 100, 160, '1x', 120};
+chkEvents = uicheckbox(c1, 'Text', 'Device events', 'Value', true, ...
     'ValueChangedFcn', @(~,~) refreshTimeline());
+place(chkEvents, 1, 1);
 chkEpochs = uicheckbox(c1, 'Text', 'Show epochs', 'Value', true, ...
     'ValueChangedFcn', @(~,~) refreshTimeline());
-uilabel(c1, 'Text', '24-h profile:', 'HorizontalAlignment', 'right');
+place(chkEpochs, 1, 2);
+place(uilabel(c1, 'Text', '24-h profile:', 'HorizontalAlignment', 'right'), 1, 3);
 ddProfile = uidropdown(c1, 'Items', {'All data', 'By score group', 'By epoch'}, ...
     'Tooltip', 'Score and threshold are set in the Stats tab (BFMDRS or UHDRS)', ...
     'ValueChangedFcn', @(~,~) refreshCirc());
-uilabel(c1, 'Text', '');
-uibutton(c1, 'Text', 'Redraw', 'ButtonPushedFcn', @(~,~) refreshTimelineTab());
+place(ddProfile, 1, 4);
+place(uibutton(c1, 'Text', 'Redraw', 'ButtonPushedFcn', @(~,~) refreshTimelineTab()), 1, 6);
+chkManEv = uicheckbox(c1, 'Text', 'Manual events', 'Value', true, ...
+    'ValueChangedFcn', @(~,~) refreshTimeline());
+place(chkManEv, 2, 1);
+place(uibutton(c1, 'Text', 'Add event...', ...
+    'Tooltip', 'Add an event at a date and time you type', ...
+    'ButtonPushedFcn', @(~,~) openManEvDialog(NaN)), 2, 2);
+tglPickEv = uibutton(c1, 'state', 'Text', 'Click plot to add', ...
+    'Tooltip', 'While on, clicking the Timeline plot adds an event at that time', ...
+    'ValueChangedFcn', @(~,~) onPickToggle());
+place(tglPickEv, 2, [3 4]);
+lblPickEv = uilabel(c1, 'Text', '', 'FontColor', [0.35 0.35 0.35]);
+place(lblPickEv, 2, 5);
+place(uibutton(c1, 'Text', 'Manage events...', ...
+    'Tooltip', 'Edit, delete, import or export manual events', ...
+    'ButtonPushedFcn', @(~,~) openManEvManager()), 2, 6);
 axTL   = uiaxes(g1);
 axStim = uiaxes(g1);
 axCirc = uiaxes(g1);
@@ -402,7 +430,7 @@ efPhHi = uieditfield(c3, 'numeric', 'Value', 30, 'Limits', [2 200]); place(efPhH
 place(uilabel(c3, 'Text', 'PAC amp', 'HorizontalAlignment', 'right'), 2, 5);
 efAmLo = uieditfield(c3, 'numeric', 'Value', 50, 'Limits', [2 500]); place(efAmLo, 2, 6);
 efAmHi = uieditfield(c3, 'numeric', 'Value', 110, 'Limits', [3 500]); place(efAmHi, 2, 7);
-gSeg = uigridlayout(c3, [1 3]);
+gSeg = uigridlayout(c3, [1 4]);
 gSeg.Padding = [0 0 0 0]; gSeg.ColumnSpacing = 5;
 place(gSeg, 2, [8 9]);
 uibutton(gSeg, 'Text', 'Stim steps', ...
@@ -411,7 +439,11 @@ uibutton(gSeg, 'Text', 'Stim steps', ...
 uibutton(gSeg, 'Text', 'Add view', ...
     'Tooltip', 'Add a segment for the time range currently shown (zoom the spectrogram or stim panel first)', ...
     'ButtonPushedFcn', @(~,~) onSegAdd());
-uibutton(gSeg, 'Text', 'Clear segs', 'ButtonPushedFcn', @(~,~) onSegClear());
+uibutton(gSeg, 'Text', 'Clear', 'Tooltip', 'Remove all segments of this recording', ...
+    'ButtonPushedFcn', @(~,~) onSegClear());
+uibutton(gSeg, 'Text', 'Seg PSDs', ...
+    'Tooltip', 'Pop-out window: power spectrum of each segment overlaid, plus beta power per segment', ...
+    'ButtonPushedFcn', @(~,~) onSegPSD());
 
 b3 = uigridlayout(g3, [3 3]);
 b3.ColumnWidth = {'1x', '1x', 380};
@@ -608,28 +640,75 @@ onResize();
 
 %% ================================================================ callbacks: data
     function onLoad()
-        [fn, fp] = uigetfile('*.json', 'Select Percept JSON files', 'MultiSelect', 'on');
+        % Files accumulate across calls, so each call can come from a
+        % different folder. The dialog reopens in the last folder used.
+        [fn, fp] = uigetfile({'*.json', 'Percept JSON (*.json)'}, ...
+            'Add Percept JSON files (repeat to add from other folders)', S.lastDir, 'MultiSelect', 'on');
         figure(fig);
         if isequal(fn, 0), return; end
+        S.lastDir = fp;
         fn = cellstr(fn);
+        loadPaths(fullfile(fp, fn));
+    end
+
+    function onLoadFolder()
+        d = uigetdir(S.lastDir, 'Add a folder (JSON files in all subfolders are included)');
+        figure(fig);
+        if isequal(d, 0), return; end
+        S.lastDir = d;
+        L = dir(fullfile(d, '**', '*.json'));
+        L = L(~[L.isdir]);
+        if isempty(L)
+            uialert(fig, 'No JSON files were found in that folder or its subfolders.', 'Add folder');
+            return;
+        end
+        paths = fullfile({L.folder}, {L.name});
+        nNew = sum(~ismember(paths, {S.files.path}));
+        sel = uiconfirm(fig, sprintf(['Found %d JSON file(s) in this folder and its subfolders ' ...
+            '(%d not loaded yet). Load them?'], numel(paths), nNew), 'Add folder', ...
+            'Options', {'Load', 'Cancel'}, 'DefaultOption', 1, 'CancelOption', 2);
+        if ~strcmp(sel, 'Load'), return; end
+        loadPaths(paths);
+    end
+
+    function loadPaths(paths)
+        % Parse and merge JSON files given as full paths (any folders).
+        paths = cellstr(paths);
         dlg = uiprogressdlg(fig, 'Title', 'Loading JSON', 'Value', 0);
         warn  = {};
-        known = {S.files.path};
-        for k = 1:numel(fn)
-            fpath = fullfile(fp, fn{k});
-            dlg.Value = (k - 1) / numel(fn);
-            dlg.Message = fn{k};
-            if any(strcmp(known, fpath))
-                warn{end+1} = [fn{k} ': already loaded']; %#ok<AGROW>
+        nOK = 0;
+        for k = 1:numel(paths)
+            fpath = paths{k};
+            [~, nm, ext] = fileparts(fpath);
+            dlg.Value = (k - 1) / numel(paths);
+            dlg.Message = [nm ext];
+            if any(strcmp({S.files.path}, fpath))
+                warn{end+1} = [nm ext ': already loaded']; %#ok<AGROW>
                 continue;
             end
             try
                 P = parsePerceptFile(fpath);
             catch ME
-                warn{end+1} = sprintf('%s: %s', fn{k}, ME.message); %#ok<AGROW>
+                warn{end+1} = sprintf('%s: not a readable Percept session (%s)', [nm ext], ME.message); %#ok<AGROW>
                 continue;
             end
-            S.files = [S.files; P.file];
+            F = P.file;
+            if F.nL + F.nR + F.nEv + F.nStr + F.nMon + F.nTD == 0 && isnat(F.sessionDate)
+                warn{end+1} = [nm ext ': no Percept data found (skipped)']; %#ok<AGROW>
+                continue;
+            end
+            % same session exported/copied into another folder?
+            dup = false;
+            for q = 1:numel(S.files)
+                if strcmp(S.files(q).name, F.name) && isequal(S.files(q).sessionDate, F.sessionDate)
+                    dup = true;
+                    warn{end+1} = sprintf('%s: same session already loaded from %s', ...
+                        [nm ext], fileparts(S.files(q).path)); %#ok<AGROW>
+                    break;
+                end
+            end
+            if dup, continue; end
+            S.files = [S.files; F];
             fi = numel(S.files);
             S.use(fi, 1) = true;
             S.fileTL{fi} = P.tl;
@@ -643,14 +722,18 @@ onResize();
             S.streams  = [S.streams;  setFileIdx(P.streams, fi)];
             S.surveyTD = [S.surveyTD; setFileIdx(P.surveyTD, fi)];
             S.montage  = [S.montage;  setFileIdx(P.montage, fi)];
+            nOK = nOK + 1;
         end
         close(dlg);
-        dedupe();
-        S.evChecked = false(numel(S.events), 1);
-        S.stLast = [];
-        refreshAll();
+        if nOK > 0
+            dedupe();
+            S.evChecked = false(numel(S.events), 1);
+            S.stLast = [];
+            refreshAll();
+        end
         if ~isempty(warn)
-            uialert(fig, strjoin(warn, newline), 'Some files were skipped', 'Icon', 'warning');
+            uialert(fig, sprintf('Loaded %d of %d file(s).\n\n%s', nOK, numel(paths), ...
+                strjoin(warn, newline)), 'Some files were skipped', 'Icon', 'warning');
         end
     end
 
@@ -692,6 +775,7 @@ onResize();
         S.evView  = [];
         S.evChecked = false(0, 1);
         S.stLast = [];
+        S.manEv = struct('dt', {}, 'name', {}, 'note', {});
         S.use = false(0, 1);
         S.sessRows = [];
         S.infoFile = [];
@@ -806,6 +890,7 @@ onResize();
         uStr = [num2s(uv) us];
         taInfo.Value = {
             F.name
+            sprintf('Folder  : %s', fileparts(F.path))
             sprintf('Patient : %s', F.patientId)
             sprintf('Session : %s', char(string(sd, 'yyyy-MM-dd HH:mm')))
             sprintf('BFMDRS  : %s   UHDRS: %s', bfmStr, uStr)
@@ -904,6 +989,268 @@ onResize();
         grp(b >= thr) = 2;
     end
 
+%% ================================================================ manual Timeline events
+    function h = drawManEvents(ax, xl, yl, withLabels)
+        % Manual events: dash-dot lines with a marker at the top; one line per
+        % event so its data tip can carry the note. Legend: one entry per name.
+        h = gobjects(0);
+        if ~chkManEv.Value || isempty(S.manEv), return; end
+        names = unique({S.manEv.name});
+        cm = tcolors(numel(names) + 2);
+        cm = cm(end - numel(names) + 1:end, :);          % warm end of turbo
+        shown = false(1, numel(names));
+        for q = 1:numel(S.manEv)
+            e = S.manEv(q);
+            x = datenum(localTime(e.dt));
+            if x < xl(1) || x > xl(2), continue; end
+            j = find(strcmp(names, e.name), 1);
+            vis = 'off';
+            if withLabels && ~shown(j), vis = 'on'; shown(j) = true; end
+            hl = plot(ax, [x x], yl, '-.', 'Color', cm(j, :), 'LineWidth', 1.6, ...
+                'Marker', 'v', 'MarkerIndices', 2, 'MarkerFaceColor', cm(j, :), 'MarkerSize', 7, ...
+                'DisplayName', [e.name ' (manual)'], 'HandleVisibility', vis, ...
+                'Tag', 'manEv', 'UserData', e.note);
+            h(end+1) = hl; %#ok<AGROW>
+            if withLabels
+                text(ax, x, yl(2), ['  ' e.name], 'Rotation', 90, 'FontSize', 8, ...
+                    'HorizontalAlignment', 'right', 'VerticalAlignment', 'bottom', ...
+                    'Color', cm(j, :) * 0.75, 'PickableParts', 'none', 'Interpreter', 'none');
+            end
+        end
+    end
+
+    function addManEvNotes(h)
+        % Append the note to each manual event's data tip.
+        for q = 1:numel(h)
+            try
+                if ~isempty(h(q).UserData)
+                    h(q).DataTipTemplate.DataTipRows(end+1) = ...
+                        dataTipTextRow('Note', repmat({h(q).UserData}, size(h(q).XData)));
+                end
+            catch
+            end
+        end
+    end
+
+    function names = manEvNameChoices()
+        names = {'Programming change', 'Medication change', 'Symptom flare', 'Illness', ...
+            'Sleep disruption', 'Note'};
+        if ~isempty(S.events), names = [names, {S.events.name}]; end
+        if ~isempty(S.manEv), names = [{S.manEv.name}, names]; end
+        names = unique(names, 'stable');
+    end
+
+    function onPickToggle()
+        if tglPickEv.Value
+            if isempty(S.files)
+                tglPickEv.Value = false;
+                uialert(fig, 'Load files first.', 'Manual events'); return;
+            end
+            lblPickEv.Text = 'Click the Timeline plot where the event happened.';
+            % the axes itself catches the click: plotted objects stop
+            % intercepting it and default zoom/pan/datatip are paused
+            try, disableDefaultInteractivity(axTL); catch, end
+            set(findall(axTL, '-property', 'HitTest'), 'HitTest', 'off');
+            axTL.HitTest = 'on';
+            axTL.PickableParts = 'all';
+            axTL.ButtonDownFcn = @(~,~) onAxPick();
+        else
+            stopPick();
+        end
+    end
+
+    function stopPick()
+        tglPickEv.Value = false;
+        lblPickEv.Text = '';
+        axTL.ButtonDownFcn = '';
+        try, enableDefaultInteractivity(axTL); catch, end
+        refreshTimeline();                 % restores data tips on the redrawn lines
+    end
+
+    function onAxPick()
+        x = axTL.CurrentPoint(1, 1);
+        stopPick();
+        if x > 7e5 && x < 8e5
+            openManEvDialog(x);
+        end
+    end
+
+    function openManEvDialog(x)
+        % x = datenum (local time) from a click, or NaN to type the time.
+        if isnan(x)
+            xl = axTL.XLim;
+            if xl(1) > 7e5, x = mean(xl); else, x = now; end %#ok<TNOW1>
+        end
+        tStr = char(string(datetime(x, 'ConvertFrom', 'datenum'), 'yyyy-MM-dd HH:mm'));
+        pos = fig.Position;
+        d = uifigure('Name', 'Add manual event', 'WindowStyle', 'modal', ...
+            'Position', [pos(1) + 120, pos(2) + 160, 460, 230]);
+        gD = uigridlayout(d, [5 2]);
+        gD.ColumnWidth = {110, '1x'};
+        gD.RowHeight = {26, 26, 26, '1x', 32};
+        uilabel(gD, 'Text', 'Event', 'HorizontalAlignment', 'right');
+        ddN = uidropdown(gD, 'Items', manEvNameChoices(), 'Editable', 'on', ...
+            'Tooltip', 'Pick a type or type your own');
+        uilabel(gD, 'Text', sprintf('Time (%s)', tzName()), 'HorizontalAlignment', 'right');
+        efT = uieditfield(gD, 'text', 'Value', tStr, 'Placeholder', 'yyyy-MM-dd HH:mm');
+        uilabel(gD, 'Text', 'Note', 'HorizontalAlignment', 'right');
+        efN = uieditfield(gD, 'text', 'Value', '', 'Placeholder', 'optional, e.g. L 2.5 -> 3.0 mA');
+        uilabel(gD, 'Text', '');
+        uilabel(gD, 'Text', '');
+        uilabel(gD, 'Text', '');
+        gB = uigridlayout(gD, [1 2]);
+        gB.Padding = [0 0 0 0];
+        uibutton(gB, 'Text', 'Cancel', 'ButtonPushedFcn', @(~,~) delete(d));
+        uibutton(gB, 'Text', 'Add', 'ButtonPushedFcn', @(~,~) addFromDialog());
+
+        function addFromDialog()
+            dt = parseLocalTime(efT.Value);
+            nm = strtrim(char(ddN.Value));
+            if isnat(dt)
+                uialert(d, 'Enter the time as yyyy-MM-dd HH:mm.', 'Time'); return;
+            end
+            if isempty(nm)
+                uialert(d, 'Give the event a name.', 'Event'); return;
+            end
+            S.manEv(end+1) = struct('dt', dt, 'name', nm, 'note', strtrim(char(efN.Value)));
+            sortManEv();
+            delete(d);
+            refreshTimeline();
+        end
+    end
+
+    function dt = parseLocalTime(str)
+        % Local "yyyy-MM-dd HH:mm[:ss]" in the selected time zone -> UTC datetime.
+        dt = natUTC();
+        str = strtrim(char(str));
+        fmts = {'yyyy-MM-dd HH:mm', 'yyyy-MM-dd HH:mm:ss', 'yyyy-MM-dd'};
+        for q = 1:numel(fmts)
+            try
+                d0 = datetime(str, 'InputFormat', fmts{q}, 'TimeZone', tzName());
+                if ~isnat(d0)
+                    d0.TimeZone = 'UTC';
+                    dt = d0;
+                    return;
+                end
+            catch
+            end
+        end
+    end
+
+    function sortManEv()
+        if numel(S.manEv) > 1
+            [~, o] = sort(vertcat(S.manEv.dt));
+            S.manEv = S.manEv(o);
+        end
+    end
+
+    function openManEvManager()
+        pos = fig.Position;
+        d = uifigure('Name', 'Manual events', 'WindowStyle', 'modal', ...
+            'Position', [pos(1) + 100, pos(2) + 100, 720, 420]);
+        gM = uigridlayout(d, [3 1]);
+        gM.RowHeight = {22, '1x', 32};
+        uilabel(gM, 'Text', sprintf(['Edit cells directly (time as yyyy-MM-dd HH:mm, %s). ' ...
+            'Select a row to delete it.'], tzName()));
+        tb = uitable(gM, 'RowName', {}, 'ColumnEditable', [true true true], ...
+            'CellEditCallback', @(~,evt) onEdit(evt), ...
+            'CellSelectionCallback', @(~,evt) onSel(evt));
+        gB = uigridlayout(gM, [1 5]);
+        gB.Padding = [0 0 0 0];
+        gB.ColumnWidth = {110, 110, 110, '1x', 90};
+        uibutton(gB, 'Text', 'Delete selected', 'ButtonPushedFcn', @(~,~) onDelete());
+        uibutton(gB, 'Text', 'Import CSV...', 'ButtonPushedFcn', @(~,~) onImport());
+        uibutton(gB, 'Text', 'Export CSV...', 'ButtonPushedFcn', @(~,~) onExport());
+        uilabel(gB, 'Text', '');
+        uibutton(gB, 'Text', 'Close', 'ButtonPushedFcn', @(~,~) delete(d));
+        selRow = [];
+        fillTable();
+
+        function fillTable()
+            n = numel(S.manEv);
+            if n == 0
+                tb.Data = table(cell(0, 1), cell(0, 1), cell(0, 1), ...
+                    'VariableNames', {'Time', 'Event', 'Note'});
+                return;
+            end
+            tl = cellstr(string(localTime(vertcat(S.manEv.dt)), 'yyyy-MM-dd HH:mm'));
+            tb.Data = table(tl, {S.manEv.name}', {S.manEv.note}', ...
+                'VariableNames', {'Time', 'Event', 'Note'});
+        end
+
+        function onSel(evt)
+            if isempty(evt.Indices), selRow = []; else, selRow = unique(evt.Indices(:, 1)); end
+        end
+
+        function onEdit(evt)
+            r = evt.Indices(1); c = evt.Indices(2);
+            if r > numel(S.manEv), return; end
+            v = strtrim(char(evt.NewData));
+            switch c
+                case 1
+                    dt = parseLocalTime(v);
+                    if isnat(dt)
+                        uialert(d, 'Use yyyy-MM-dd HH:mm.', 'Time');
+                        fillTable(); return;
+                    end
+                    S.manEv(r).dt = dt;
+                    sortManEv();
+                case 2
+                    if isempty(v), fillTable(); return; end
+                    S.manEv(r).name = v;
+                otherwise
+                    S.manEv(r).note = v;
+            end
+            fillTable();
+            refreshTimeline();
+        end
+
+        function onDelete()
+            if isempty(selRow), uialert(d, 'Select a row first.', 'Delete'); return; end
+            S.manEv(selRow(selRow <= numel(S.manEv))) = [];
+            selRow = [];
+            fillTable();
+            refreshTimeline();
+        end
+
+        function onExport()
+            if isempty(S.manEv), uialert(d, 'No manual events to export.', 'Export'); return; end
+            [f, p] = uiputfile('*.csv', 'Export manual events', 'manual_events.csv');
+            figure(d);
+            if isequal(f, 0), return; end
+            T = table(cellstr(string(vertcat(S.manEv.dt), 'yyyy-MM-dd''T''HH:mm:ss''Z''')), ...
+                {S.manEv.name}', {S.manEv.note}', 'VariableNames', {'TimeUTC', 'Event', 'Note'});
+            writetable(T, fullfile(p, f));
+        end
+
+        function onImport()
+            [f, p] = uigetfile('*.csv', 'Import manual events');
+            figure(d);
+            if isequal(f, 0), return; end
+            try
+                T = readtable(fullfile(p, f), 'TextType', 'char', 'Delimiter', ',', ...
+                    'DatetimeType', 'text');
+                added = 0;
+                for q = 1:height(T)
+                    dt = parsePerceptTime(string(T.TimeUTC(q)));
+                    if isnat(dt), continue; end
+                    nt = '';
+                    if ismember('Note', T.Properties.VariableNames) && iscell(T.Note) && ~isempty(T.Note{q})
+                        nt = char(T.Note{q});
+                    end
+                    S.manEv(end+1) = struct('dt', dt, 'name', char(T.Event{q}), 'note', nt);
+                    added = added + 1;
+                end
+                sortManEv();
+                fillTable();
+                refreshTimeline();
+                uialert(d, sprintf('Imported %d event(s).', added), 'Import', 'Icon', 'success');
+            catch ME
+                uialert(d, ['Could not read the file: ' ME.message], 'Import');
+            end
+        end
+    end
+
 %% ================================================================ Timeline tab
     function refreshTimelineTab()
         refreshTimeline();
@@ -974,6 +1321,7 @@ onResize();
                     'DisplayName', names{j});
             end
         end
+        manH = drawManEvents(axTL, xl, yl, true);
         hold(axTL, 'off');
         setDateTicks(axTL);
         ylabel(axTL, 'LFP power (a.u.)');
@@ -983,6 +1331,7 @@ onResize();
             'Interpreter', 'none');
         legend(axTL, 'Location', 'northeastoutside', 'Interpreter', 'none', 'Box', 'off');
         tipAxes(axTL);
+        addManEvNotes(manH);
         refreshStim(xl);
     end
 
@@ -1009,6 +1358,9 @@ onResize();
             a = T.amp(~isnan(T.amp));
             nChg = nChg + sum(abs(diff(a)) > 0.05);
             top = max(top, max(a));
+        end
+        if top > 0
+            drawManEvents(axStim, xl, [0 max(top * 1.15, 0.5)], false);
         end
         hold(axStim, 'off');
         xlim(axStim, xl);
@@ -3008,6 +3360,104 @@ onResize();
         S.streams(i).segs = segs;
         plotStreamStim();
         refreshSegTable();
+        onSegPSD();                        % spectra per stimulation step, in a pop-out window
+    end
+
+    function onSegPSD()
+        % Welch PSD of every segment of the selected recording, overlaid and
+        % labelled by segment number, plus mean beta power per segment
+        % against the segment's stimulation amplitude. 0.5 s is trimmed at
+        % each segment edge to keep stimulation transitions out.
+        i = curStream();
+        if i == 0, return; end
+        st_ = S.streams(i);
+        sg = st_.segs;
+        if isempty(sg)
+            uialert(fig, 'Create segments first (Stim steps or Add view).', 'Segment PSDs'); return;
+        end
+        x = prepSignal(st_.x);
+        fs = st_.fs;
+        n = numel(x);
+        L = round(max(efWin.Value, 1) * fs);
+        band = [efBetaLo.Value efBetaHi.Value];
+        fmax = min(100, fs / 2);
+        nS = size(sg, 1);
+        cm = tcolors(nS);
+        % stimulation amplitude of the recorded hemisphere within each segment
+        mA = nan(nS, 1);
+        if ~isempty(st_.stimT)
+            if strcmp(st_.hemi, 'R'), sv = st_.stimR; else, sv = st_.stimL; end
+            for q = 1:nS
+                in = st_.stimT >= sg(q, 1) & st_.stimT <= sg(q, 2);
+                if any(in), mA(q) = median(sv(in), 'omitnan'); end
+            end
+        end
+        useStim = any(~isnan(mA));
+        fig2 = figure('Name', sprintf('Segment PSDs: %s %s %s', sessLabel(st_.fileIdx), ...
+            st_.source, st_.channel), 'Color', 'w', 'NumberTitle', 'off', 'Position', [120 120 1250 500]);
+        tl = tiledlayout(fig2, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+        ax1 = nexttile(tl); hold(ax1, 'on');
+        ax2 = nexttile(tl); hold(ax2, 'on');
+        used = []; skipped = []; xs = []; ys = [];
+        for q = 1:nS
+            a = max(1, round((sg(q, 1) + 0.5) * fs) + 1);
+            b = min(n, round((sg(q, 2) - 0.5) * fs));
+            if b - a + 1 < 2 * L
+                skipped(end+1) = q; %#ok<AGROW>
+                continue;
+            end
+            [P, f] = welchPSDn(x(a:b), fs, L);
+            k = f >= 1 & f <= fmax;
+            lbl = sprintf('#%d', q);
+            if ~isnan(mA(q)), lbl = sprintf('#%d  %.2g mA', q, mA(q)); end
+            sc = scoreText(sg(q, 3), sg(q, 4), true);
+            if ~strcmp(sc, 'unscored'), lbl = [lbl ', ' sc]; end %#ok<AGROW>
+            plot(ax1, f(k), P(k), '-', 'Color', cm(q, :), 'LineWidth', 1.4, 'DisplayName', lbl);
+            inB = f >= band(1) & f <= band(2);
+            fb = f(inB); pb = P(inB);
+            [pk, j] = max(pb);
+            text(ax1, fb(j), pk, sprintf(' #%d', q), 'Color', cm(q, :) * 0.8, 'FontWeight', 'bold', ...
+                'FontSize', 9, 'VerticalAlignment', 'bottom', 'PickableParts', 'none');
+            bdb = 10 * log10(mean(pb));
+            if useStim, xq = mA(q); else, xq = q; end
+            if ~isnan(xq)
+                plot(ax2, xq, bdb, 'o', 'MarkerSize', 9, 'MarkerFaceColor', cm(q, :), ...
+                    'MarkerEdgeColor', cm(q, :) * 0.7, 'DisplayName', sprintf('#%d', q));
+                text(ax2, xq, bdb, sprintf('  #%d', q), 'FontSize', 9, 'PickableParts', 'none');
+                xs(end+1) = xq; ys(end+1) = bdb; %#ok<AGROW>
+            end
+            used(end+1) = q; %#ok<AGROW>
+        end
+        if isempty(used)
+            close(fig2);
+            uialert(fig, sprintf(['Every segment is shorter than two %.1f-s Welch windows ' ...
+                '(after trimming 0.5 s at each edge).'], L / fs), 'Segment PSDs');
+            return;
+        end
+        if numel(xs) > 1
+            plot(ax2, xs, ys, '-', 'Color', [0.7 0.7 0.7], 'HandleVisibility', 'off');   % segment order
+        end
+        hold(ax1, 'off'); hold(ax2, 'off');
+        ax1.YScale = 'log';
+        xlim(ax1, [1 fmax]);
+        shadeBand(ax1, band(1), band(2));
+        xlabel(ax1, 'Frequency (Hz)'); ylabel(ax1, 'PSD (a.u.^2/Hz)');
+        title(ax1, sprintf('%s | %s %s: PSD per segment', sessLabel(st_.fileIdx), st_.source, ...
+            st_.channel), 'Interpreter', 'none');
+        if ~isempty(skipped)
+            subtitle(ax1, sprintf('Skipped (too short): %s', strjoin(arrayfun(@(v) sprintf('#%d', v), ...
+                skipped, 'UniformOutput', false), ', ')));
+        end
+        legend(ax1, 'Location', 'northeastoutside', 'Interpreter', 'none', 'Box', 'off');
+        if useStim
+            xlabel(ax2, sprintf('Stimulation, %s hemisphere (mA)', hemiName(st_.hemi)));
+        else
+            xlabel(ax2, 'Segment #');
+        end
+        ylabel(ax2, sprintf('Mean %g-%g Hz power (dB)', band));
+        title(ax2, 'Beta power per segment (grey line = segment order)');
+        grid(ax2, 'on');
+        tipAxes([ax1 ax2]);
     end
 
     function onSegAdd()
@@ -3445,6 +3895,9 @@ end
 % ------------------------------------------------------------- JSON parsing
 function P = parsePerceptFile(fpath)
 data = jsondecode(fileread(fpath));
+if ~isstruct(data) || ~isscalar(data)
+    error('top level is not a JSON object');
+end
 [~, nm, ext] = fileparts(fpath);
 F = emptyFiles();
 F(1).name = [nm ext];
