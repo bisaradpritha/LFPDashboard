@@ -2,6 +2,8 @@
 
 ![LFP Dashboard](logo.png)
 
+# LFP Dashboard
+
 An interactive MATLAB app for exploring and comparing pallidal local field potential (LFP) recordings from Medtronic Percept™ (BrainSense™) DBS devices. It loads the JSON session files exported from the clinician programmer and brings the recording modalities together in one window: Timeline, Events, Survey (frequency and time domain), and Streaming. You can then compare any two or more sessions to see how neural activity changes with therapy.
 
 The whole app is a single file, `LFPDashboard.m`, and uses **base MATLAB only**. No Signal Processing or Statistics toolbox is required: filtering, Hilbert transform, Welch PSD, spectrograms, percentiles, FOOOF-style fitting, IRASA and every statistical test are implemented in the file.
@@ -59,7 +61,11 @@ No compilation or additional files are needed.
 
 ## Quick start
 
-1. Click **Load JSON files...** and select one or more Percept session exports. You can load files in several batches; duplicates are skipped.
+1. Load Percept session exports from as many folders as you need:
+   - **Add files...** picks one or more JSON files. Repeat it to add files from other folders; the dialog reopens in the last folder used.
+   - **Add folder...** loads every JSON file in a folder **and all of its subfolders**, after confirming how many were found.
+
+   Files already loaded are skipped, as is the same session copied into a second folder (same file name and session date). Non-Percept JSON files are skipped with a warning. The info box shows the folder each session came from.
 2. In the **Sessions** table on the left, tick the sessions to include. Every tab works on the ticked sessions only.
 3. Check that the **Time zone** matches where the patient lives. Device timestamps are UTC, and this setting controls hour-of-day and daily calculations.
 4. Open any tab and use its controls. Most plots update automatically; analyses that take longer have their own button (**Analyze**, **Compare**, **Fit**, **Run**, **Plot**).
@@ -126,6 +132,7 @@ Two plots show programmed amplitude with the Timeline range, and stimulation rat
 ### Timeline
 - Chronic LFP power for each hemisphere, with a 24-h moving median, alternating epoch shading and labels, and patient-marked event markers.
 - **Stimulation amplitude panel** beneath it, with a linked x-axis.
+- **Manual events:** add your own events (e.g. programming or medication changes, illness) either by typing a date and time (**Add event...**) or by switching on **Click plot to add** and clicking the Timeline. They are drawn as labelled dash-dot lines that also appear on the stimulation panel, and their data tips include the note. **Manage events...** edits or deletes them and imports or exports them as CSV (times stored in UTC).
 - **24-h profile** in 10-min bins: all data, by severity-score group (high vs. low; the score and threshold are set in the Stats tab), or one line per epoch. Dotted lines show the interquartile range.
 
 ### Timeline 3D
@@ -180,6 +187,7 @@ Analysis of one BrainSense Streaming or Indefinite Streaming recording:
   - **Clear segs** removes all segments.
 
   The segment table shows median L/R mA, mean beta power (dB) and editable BFMDRS/UHDRS scores for each segment.
+- **Segment PSDs** (opens automatically after **Stim steps**; reopen with **Seg PSDs**): a pop-out window overlaying the Welch PSD of every segment, labelled by segment number (with its mA and score in the legend), next to mean beta power per segment plotted against stimulation amplitude. 0.5 s is trimmed at each segment edge; segments shorter than two Welch windows are skipped and listed.
 
 ### Streaming compare
 One column per ticked session: Left spectrogram, Right spectrogram, and stimulation amplitude.
@@ -220,7 +228,7 @@ Statistics on Timeline LFP power, grouped by epoch or by severity score (high vs
 
 Manual session values are marked with **\*** wherever session labels appear, e.g. `E3 (BFM 22*)`, so they are never mistaken for scores parsed from file names. Manual scores feed the score groupings in Stats and the Timeline 24-h profile.
 
-> Manual scores and segment annotations are kept **in memory only**. They are lost when the app closes, and nothing is written back to the JSON files.
+> Manual scores and segment annotations are kept **in memory only**. They are lost when the app closes, and nothing is written back to the JSON files. Manual Timeline events can be saved and reloaded with **Manage events... > Export / Import CSV**.
 
 ---
 
